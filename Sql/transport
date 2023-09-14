@@ -1,0 +1,331 @@
+/*
+Car_Retailer Data Expolaration
+Skills Used : Joins, CTEs, Window Functions, Aggregation Functions, Creating view, Creating user defined functions, Creating stored procedures
+*/
+use transport;
+
+-- Changing necessary Data types and adding Primary key
+Alter table customers modify Customer_Name varchar(50);
+Alter table customers modify Contact_Last_Name varchar(50);
+Alter table customers modify Contact_First_Name varchar(50);
+Alter table customers modify City varchar(50);
+Alter table customers modify State varchar(50);
+Alter table employees modify Last_Name varchar(50);
+Alter table employees modify First_name varchar(50);
+Alter table employees modify job_title varchar(50);
+Alter table offices modify City varchar(50);
+Alter table offices modify State varchar(50);
+Alter table offices modify country varchar(50);
+Alter table customers modify country varchar(50);
+Alter table order_details modify product_code varchar(50);
+Alter table product_lines modify product_line varchar(50);
+Alter table products  modify product_name varchar(255);
+Alter table products  modify product_code varchar(255);
+Alter table products  modify product_line varchar(50);
+Alter table orders modify Order_Date date;
+Alter table orders modify Required_Date date;
+Alter table orders modify Shipped_Date date;
+Alter table payments modify Payment_Date date;
+Alter table customers add primary key(Customer_Number);
+Alter table employees add primary key(Employee_Number);
+Alter table offices add primary key(Office_code);
+Alter table products add primary key(Product_Code);
+Alter table product_lines add primary key(product_line);
+
+-- Exploring Data Sets
+select * 
+from payments;
+
+Select  * 
+from customers;
+
+Select * 
+from orders;
+
+
+Select * 
+from order_details;
+
+Select * 
+from product_lines;
+
+Select * 
+from employees;
+
+Select *
+from offices;
+
+Select * 
+from products;
+
+-- Creating a new column in orders for finding difference between shipped date and order date to track delivery service
+Alter table orders
+Add Days_to_ship int;
+
+Update orders 
+set Days_to_ship =
+datediff(Shipped_Date,Order_Date);
+
+-- Finding total revenue earned and profit an their difference
+Select Total_revenue, Total_profit,
+round((Total_revenue - Total_profit),2) as 'Difference'
+from(
+select round(sum(quantity_ordered * price_each),2) as 'Total_revenue',
+round(sum((b.price_each - a.buy_price) * b.quantity_ordered),2) as 'Total_profit'
+from products a
+join order_details b 
+on a.product_code = b.product_code)a;
+
+-- Categorizing based on product_line
+Select product_line, count(product_code) as 'Number_of_products'
+from products
+group by product_line
+order by 2 desc;
+
+-- Categorizing based on product_vendors
+select distinct product_vendor,
+count(product_code) over(partition by product_vendor) as "Number_of_products"
+from products
+order by 2 desc;
+
+-- Number of vendors for each product line
+Select distinct product_line,
+count(product_vendor) over(partition by product_line) as "Number_of_vendors"
+from products
+order by 2 desc;
+
+-- Calculating revenue per order number
+Select order_number,
+round(sum(quantity_ordered * price_each),2) as 'Revenue_per-order_number'
+from order_details
+group by order_number
+order by 2 desc;
+
+-- Calculating revenue per customer
+select c.customer_number, c.customer_name,
+round(sum(quantity_ordered * price_each),2) as 'Revenue_per_customer'
+from order_details a
+inner join orders b on 
+a.order_number = b.order_number
+inner join customers c
+on b.customer_number = c.customer_number 
+group by c.customer_number, c.customer_name
+order by 3 desc;
+
+-- Counting number of orders made by our customer from which we have made most revenue
+select customer_name, count(order_number) as 'Number_of_orders'
+from orders a
+join customers b
+on a.customer_number = b.customer_number
+where customer_name like 'euro%'
+group by customer_name;
+
+-- Number of orders received per month of every year
+select monthname(order_date) as 'Month' ,year(order_date) as 'Year',
+count(order_number) 
+from orders
+group by 1,2 ;
+
+-- Profit generated every year
+Select year(order_date) as'Year' ,
+round(sum((a.price_each - c.buy_price) * a.quantity_ordered),2) as 'profit'
+from order_details a
+join orders b
+ on a.order_number = b.order_number
+join products c 
+on a.product_code = c.product_code
+group by 1
+order by 2 desc;
+
+--  Ranking Profit generated through product line
+Select product_line, profit, 
+rank() over(order by profit desc) as "Ranks"
+from(
+Select Product_line,
+round(sum((a.price_each - c.buy_price) * a.quantity_ordered),2) as 'profit'
+from order_details a
+join orders b
+ on a.order_number = b.order_number
+join products c 
+on a.product_code = c.product_code
+group by 1
+) d;
+  
+  -- Profit breakdown of our top product_line which we got from above query (Classic cars)
+Select monthname(order_date) as"Month", year(order_date) as 'Year',
+round(sum((a.price_each - c.buy_price) * a.quantity_ordered),2) as 'profit'
+from order_details a
+join orders b
+ on a.order_number = b.order_number
+join products c 
+on a.product_code = c.product_code
+where product_line = 'Classic Cars'
+group by 1,2 ;
+
+-- Creating a view  to Track our Month on Month Growth
+Create view v_Month_on_Month_Growth
+as
+Select Year, month, profit,
+ ((profit / lag(profit, 1, "N/A") over(partition by year) )- 1) * 100  as MoM_Growth
+ from(
+select year(a.order_date) as 'Year', 
+monthname(a.order_date) as "Month",
+month(a.order_date) as 'Month_Num',
+round(sum((b.price_each - c.buy_price) * b.quantity_ordered),2) as 'profit'
+from order_details b
+join orders a
+ on a.order_number = b.order_number
+ join products c
+ on b.product_code = c.product_code
+ group by 1,2,3) d ;
+  
+  -- Tracking our customers who have ordered below and above average order value
+  select customer_number,
+  sum(order_value >= avg_order_value) as "Orders_above_avg_value",
+  sum(order_value < avg_order_value) as "Orders_below_avg_value"
+  from(
+  Select c.customer_number, 
+  round((price_each * quantity_ordered),2)as 'order_value',
+ round(avg(price_each * quantity_ordered) over (),2) as 'Avg_order_value'
+ from order_details a
+ join orders b
+ on a.order_number = b.order_number
+ join customers c
+ on b.customer_number = c.customer_number) a
+ group by customer_number
+ order by 1;
+ 
+ -- Creating a function to track how much revenue is generated by each employee by just entering its employee_number
+ DELIMITER $$
+ CREATE function f_emp_revenue(p_emp_number integer)
+ Returns decimal(10,2)
+ Deterministic
+ BEGIN
+ Declare v_emp_revenue
+ decimal(10,2);
+ 
+ Select round(sum(quantity_ordered * price_each),2)
+  into v_emp_revenue
+ from employees a
+ join customers b
+ on a.employee_number = b.sales_rep_employee_number
+ join orders c
+ on b.customer_number = c.customer_number
+ join order_details d
+ on c.order_number = d.order_number
+ where a.employee_number = p_emp_number ;
+ 
+ Return v_emp_revenue ;
+ END$$
+ DELIMITER ;
+ 
+ 
+-- Tracking our employee offices across various cities around the world by creating a stored procedure
+DELIMITER $$
+Create procedure p_emp_office_state(in p_emp_no integer, out p_office_city varchar(255))
+Begin
+select a.city
+into p_office_city
+from offices a
+join employees b 
+ON a.office_code=b.office_code
+where b.employee_number = p_emp_no;
+END$$
+DELIMITER ;
+
+
+-- Calculating profit genrated by different product lines and then finding the difference between profits and different between profit %s  
+select * , Round(
+ (((profit_difference- lead(profit_difference) over())  /  lead(profit_difference) over()) *100 ),2) as 'profit_%_difference'
+from(
+select product_line,
+profit, round((profit - lead(profit,1, NULL) over()),2) as 'profit_difference'
+from(
+Select a.product_line, round(sum((b.price_each - a.buy_price) * b.quantity_ordered),2) as 'profit'
+from products a
+join order_details b
+on a.product_code = b.product_code
+group by 1
+order by 2 desc) c) d;
+
+-- Rating monthly profit
+select *, 
+case 
+when profit > 131926 then "High_profit"
+when profit between 100000 and 131926 then "Average_Profit"
+Else "Low_profit" 
+End as "profit_rating"
+from(
+select year(a.order_date) as 'Year', 
+monthname(a.order_date) as "Month",
+month(a.order_date) as 'Month_Num',
+round(sum((b.price_each - c.buy_price) * b.quantity_ordered),2) as 'profit'
+from order_details b
+join orders a
+ on a.order_number = b.order_number
+ join products c
+ on b.product_code = c.product_code
+ group by 1,2,3) a;
+ 
+ -- Creating a cte to check our number of products above selling price as compared to total number of products
+ with cte as(
+ select avg(price_each) as 'avg_selling_price' from order_details)
+ 
+ select 
+ sum(case when price_each > avg_selling_price then 1 else 0 end) as 'Number_of_products_above_selling_price',
+ count(price_each) as 'Number _of_products'
+ from order_details
+ join cte;
+ 
+ -- Profit % across different product lines
+ select product_line, profit,
+ concat(round((profit/ Total_profit) * 100,2),' ' , '%') as 'Profit %'
+ from(
+ select *, 
+ sum(profit) over() as 'Total_Profit' from(
+ Select a.product_line, 
+ round(sum((b.price_each - a.buy_price) * b.quantity_ordered),2) as 'profit'
+from products a
+join order_details b
+on a.product_code = b.product_code
+group by 1
+order by 2 desc) a) b;
+
+-- Revenue% across different product lines
+ select product_line, Revenue,
+ concat(round((Revenue/ Total_Revenue) * 100,2),' ' , '%') as 'Profit %'
+ from(
+ select *, 
+ sum(Revenue) over() as 'Total_Revenue' from(
+ Select a.product_line, 
+ round(sum((b.price_each - a.buy_price)),2) as 'Revenue'
+from products a
+join order_details b
+on a.product_code = b.product_code
+group by 1
+order by 2 desc) a) b;
+
+-- Revenue% across different customers
+Select customer_number, customer_name,
+concat(round((Revenue_per_customer/Total_Revenue)*100,2)," ", '%') as 'Revenue %'
+from(
+select *,
+sum(Revenue_per_customer) over() as 'Total_Revenue'
+from(
+select c.customer_number, c.customer_name,
+round(sum(quantity_ordered * price_each),2) as 'Revenue_per_customer'
+from order_details a
+inner join orders b on 
+a.order_number = b.order_number
+inner join customers c
+on b.customer_number = c.customer_number 
+group by c.customer_number, c.customer_name
+order by 3 desc)a) b;
+
+
+
+  
+ 
+
+
+
